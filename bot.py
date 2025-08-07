@@ -103,30 +103,68 @@ async def handle_character_callback(update: Update, context: ContextTypes.DEFAUL
             # Get AI model benefits
             ai_benefits = ai_model_manager.get_character_tier_benefits(char["price_stars"])
             
-            await query.edit_message_text(
-                f"🔒 **Unlock {char['name']}**\n\n"
-                f"💫 Price: {char['price_stars']} Stars\n"
-                f"🎭 Role: {char['role']}\n"
-                f"📍 Region: {char['region']}\n"
-                f"💬 Language: {char['language']}\n"
-                f"🤖 {ai_benefits}\n\n"
-                f"📝 {char['description']}\n\n"
-                f"Click below to unlock with Telegram Stars!",
-                reply_markup=keyboard,
-                parse_mode='Markdown'
-            )
+            # Send character image with unlock details
+            try:
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=char["image_url"],
+                    caption=f"🔒 **Unlock {char['name']}**\n\n"
+                    f"💫 Price: {char['price_stars']} Stars\n"
+                    f"🎭 Role: {char['role']}\n"
+                    f"📍 Region: {char['region']}\n"
+                    f"💬 Language: {char['language']}\n"
+                    f"🤖 {ai_benefits}\n\n"
+                    f"📝 {char['description']}\n\n"
+                    f"Click below to unlock with Telegram Stars!",
+                    reply_markup=keyboard,
+                    parse_mode='Markdown'
+                )
+                await query.edit_message_text("Character details sent! Check the photo above.")
+            except Exception as e:
+                logger.error(f"Error sending character image: {e}")
+                # Fallback to text-only if image fails
+                await query.edit_message_text(
+                    f"🔒 **Unlock {char['name']}**\n\n"
+                    f"💫 Price: {char['price_stars']} Stars\n"
+                    f"🎭 Role: {char['role']}\n"
+                    f"📍 Region: {char['region']}\n"
+                    f"💬 Language: {char['language']}\n"
+                    f"🤖 {ai_benefits}\n\n"
+                    f"📝 {char['description']}\n\n"
+                    f"Click below to unlock with Telegram Stars!",
+                    reply_markup=keyboard,
+                    parse_mode='Markdown'
+                )
         else:
             # Character is already unlocked, select it
             character_manager.set_active_character(user_id, character_id)
-            await query.edit_message_text(
-                f"✅ **{char['name']} selected!**\n\n"
-                f"🎭 Role: {char['role']}\n"
-                f"📍 Region: {char['region']}\n"
-                f"💬 Language: {char['language']}\n\n"
-                f"Start chatting with {char['name']} now! 😘\n\n"
-                f"Send /characters to change characters",
-                parse_mode='Markdown'
-            )
+            
+            # Send character image with selection confirmation
+            try:
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=char["image_url"],
+                    caption=f"✅ **{char['name']} selected!**\n\n"
+                    f"🎭 Role: {char['role']}\n"
+                    f"📍 Region: {char['region']}\n"
+                    f"💬 Language: {char['language']}\n\n"
+                    f"Start chatting with {char['name']} now! 😘\n\n"
+                    f"Send /characters to change characters",
+                    parse_mode='Markdown'
+                )
+                await query.edit_message_text("Character selected! Check the photo above.")
+            except Exception as e:
+                logger.error(f"Error sending character image: {e}")
+                # Fallback to text-only if image fails
+                await query.edit_message_text(
+                    f"✅ **{char['name']} selected!**\n\n"
+                    f"🎭 Role: {char['role']}\n"
+                    f"📍 Region: {char['region']}\n"
+                    f"💬 Language: {char['language']}\n\n"
+                    f"Start chatting with {char['name']} now! 😘\n\n"
+                    f"Send /characters to change characters",
+                    parse_mode='Markdown'
+                )
     
     # Handle character payment requests
     elif data.startswith("pay_character:"):
@@ -217,13 +255,28 @@ async def handle_character_callback(update: Update, context: ContextTypes.DEFAUL
         char = character_manager.get_character_by_id(character_id)
         
         if char and character_manager.set_active_character(user_id, character_id):
-            await query.edit_message_text(
-                f"🎉 You're now chatting with **{char['name']}**!\n\n"
-                f"💬 {char['description']}\n\n"
-                f"Start chatting with her! 😘\n\n"
-                f"Send /characters to change your AI girlfriend anytime!",
-                parse_mode='Markdown'
-            )
+            # Send character image with selection confirmation
+            try:
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=char["image_url"],
+                    caption=f"🎉 You're now chatting with **{char['name']}**!\n\n"
+                    f"💬 {char['description']}\n\n"
+                    f"Start chatting with her! 😘\n\n"
+                    f"Send /characters to change your AI girlfriend anytime!",
+                    parse_mode='Markdown'
+                )
+                await query.edit_message_text("Character selected! Check the photo above.")
+            except Exception as e:
+                logger.error(f"Error sending character image: {e}")
+                # Fallback to text-only if image fails
+                await query.edit_message_text(
+                    f"🎉 You're now chatting with **{char['name']}**!\n\n"
+                    f"💬 {char['description']}\n\n"
+                    f"Start chatting with her! 😘\n\n"
+                    f"Send /characters to change your AI girlfriend anytime!",
+                    parse_mode='Markdown'
+                )
             return CHATTING
         else:
             await query.answer("Failed to select character. Please try again.")
@@ -465,20 +518,33 @@ async def handle_successful_payment(update: Update, context: ContextTypes.DEFAUL
                 # Get AI model benefits
                 ai_benefits = ai_model_manager.get_character_tier_benefits(char["price_stars"])
                 
-                await update.message.reply_text(
-                    f"🎉 **Payment Successful!**\n\n"
-                    f"You've unlocked **{char['name']}**!\n\n"
-                    f"💫 Amount: {payment_data.total_amount} Stars\n"
-                    f"🎭 Character: {char['name']} ({char['role']})\n"
-                    f"🤖 {ai_benefits}\n\n"
-                    f"Send /characters to select her and start chatting! 😘\n\n"
-                    f"💡 **Support**: If you have any issues, send /support",
-                    parse_mode='Markdown'
-                )
-            else:
-                await update.message.reply_text(
-                    "❌ Error unlocking character. Please contact support with /support"
-                )
+                # Send character image with unlock confirmation
+                try:
+                    await context.bot.send_photo(
+                        chat_id=user_id,
+                        photo=char["image_url"],
+                        caption=f"🎉 **Payment Successful!**\n\n"
+                        f"You've unlocked **{char['name']}**!\n\n"
+                        f"💫 Amount: {payment_data.total_amount} Stars\n"
+                        f"🎭 Character: {char['name']} ({char['role']})\n"
+                        f"🤖 {ai_benefits}\n\n"
+                        f"Send /characters to select her and start chatting! 😘\n\n"
+                        f"💡 **Support**: If you have any issues, send /support",
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.error(f"Error sending character image: {e}")
+                    # Fallback to text-only if image fails
+                    await update.message.reply_text(
+                        f"🎉 **Payment Successful!**\n\n"
+                        f"You've unlocked **{char['name']}**!\n\n"
+                        f"💫 Amount: {payment_data.total_amount} Stars\n"
+                        f"🎭 Character: {char['name']} ({char['role']})\n"
+                        f"🤖 {ai_benefits}\n\n"
+                        f"Send /characters to select her and start chatting! 😘\n\n"
+                        f"💡 **Support**: If you have any issues, send /support",
+                        parse_mode='Markdown'
+                    )
         else:
             await update.message.reply_text(
                 "❌ Character not found. Please contact support with /support"
