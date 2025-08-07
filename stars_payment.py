@@ -3,6 +3,7 @@ import sqlite3
 from typing import Optional, Dict
 from telegram import LabeledPrice, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -91,14 +92,39 @@ class StarsPaymentManager:
         
         return result[0] if result else None
     
-    def create_unlock_keyboard(self, character_id: str, character_name: str, stars_amount: int) -> InlineKeyboardMarkup:
-        """Create keyboard for character unlock"""
+    def create_unlock_keyboard(self, character_id: int, character_name: str, stars_amount: int) -> InlineKeyboardMarkup:
+        """Create keyboard for character unlock payment"""
         keyboard = [
-            [InlineKeyboardButton(
-                f"💫 Unlock {character_name} ({stars_amount} Stars)",
-                callback_data=f"pay_stars:{character_id}"
-            )],
-            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_unlock")]
+            [
+                InlineKeyboardButton(
+                    f"💫 Unlock {character_name} ({stars_amount} Stars)",
+                    callback_data=f"pay_character:{character_id}:{stars_amount}"
+                )
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    def create_unlimited_access_keyboard(self) -> InlineKeyboardMarkup:
+        """Create keyboard for unlimited access payment"""
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "🌟 Unlock Unlimited Access (50 Stars)",
+                    callback_data=f"unlock_unlimited:50"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "💫 Premium Access (100 Stars)",
+                    callback_data=f"unlock_unlimited:100"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "👑 VIP Access (150 Stars)",
+                    callback_data=f"unlock_unlimited:150"
+                )
+            ]
         ]
         return InlineKeyboardMarkup(keyboard)
     
@@ -150,6 +176,28 @@ class StarsPaymentManager:
         except Exception as e:
             logger.error(f"Error processing successful payment: {e}")
             return {"success": False, "error": str(e)}
+
+    def record_unlimited_access_transaction(self, user_id: int, stars_amount: int, total_amount: int, charge_id: str) -> bool:
+        """Record unlimited access transaction in database"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT INTO stars_transactions 
+                (user_id, character_id, stars_amount, total_amount, charge_id, transaction_type, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (user_id, None, stars_amount, total_amount, charge_id, "unlimited_access", datetime.now()))
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"Unlimited access transaction recorded for user {user_id}: {stars_amount} Stars")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error recording unlimited access transaction: {e}")
+            return False
 
 # Global Stars payment manager instance
 stars_payment_manager = StarsPaymentManager()

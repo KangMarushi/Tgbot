@@ -1,10 +1,10 @@
 import logging
-from telegram import Update, ReplyKeyboardMarkup, InputFile, InlineKeyboardButton, InlineKeyboardMarkup, PreCheckoutQuery
+from telegram import Update, ReplyKeyboardMarkup, InputFile, InlineKeyboardButton, InlineKeyboardMarkup, PreCheckoutQuery, LabeledPrice
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler, PreCheckoutQueryHandler
 from config import TELEGRAM_BOT_TOKEN
 from memory import save_user, save_message, get_persona, get_user_message_count, is_user_paid, mark_user_paid
 from chat_engine import build_prompt, get_llm_reply
-from payment import create_payment_instructions, verify_payment_screenshot, is_user_paid_upi, get_qr_image_bytes
+from payment import is_user_paid_upi
 from characters import character_manager
 from stars_payment import stars_payment_manager
 from ai_models import ai_model_manager
@@ -23,21 +23,28 @@ CHATTING = 2
 # Payment settings
 FREE_MESSAGE_LIMIT = 10
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"Start command received from user {update.effective_user.id}")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Start the bot and show character selection"""
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name
+    
+    logger.info(f"User {user_id} ({user_name}) started the bot")
     
     # Check if user has an active character
-    active_char = character_manager.get_active_character(update.effective_user.id)
+    active_char = character_manager.get_active_character(user_id)
     
     if active_char:
-        # User already has an active character, go directly to chat
+        # User has an active character, continue chatting
         await update.message.reply_text(
-            f"Welcome back! You're chatting with {active_char['name']} 😘\n\n"
-            f"Send /characters to change your AI girlfriend or just start chatting!"
+            f"👋 Welcome back, {user_name}! 😘\n\n"
+            f"You're currently chatting with **{active_char['name']}** ({active_char['role']})\n\n"
+            f"Just send me a message to continue our conversation! 💕\n\n"
+            f"Send /characters to change characters",
+            parse_mode='Markdown'
         )
         return CHATTING
     else:
-        # New user or no active character, show character selection
+        # Show character selection
         await show_characters(update, context)
         return CHOOSING_PERSONA
 
@@ -78,6 +85,133 @@ async def handle_character_callback(update: Update, context: ContextTypes.DEFAUL
         await show_characters(update, context, page)
         return CHOOSING_PERSONA
     
+    # Handle character unlock requests
+    if data.startswith("unlock:"):
+        character_id = int(data.split(":")[1])
+        char = character_manager.get_character_by_id(character_id)
+        
+        if not char:
+            await query.answer("Character not found!")
+            return
+        
+        if char["is_locked"]:
+            # Show unlock options
+            keyboard = stars_payment_manager.create_unlock_keyboard(
+                character_id, char["name"], char["price_stars"]
+            )
+            
+            # Get AI model benefits
+            ai_benefits = ai_model_manager.get_character_tier_benefits(char["price_stars"])
+            
+            await query.edit_message_text(
+                f"🔒 **Unlock {char['name']}**\n\n"
+                f"💫 Price: {char['price_stars']} Stars\n"
+                f"🎭 Role: {char['role']}\n"
+                f"📍 Region: {char['region']}\n"
+                f"💬 Language: {char['language']}\n"
+                f"🤖 {ai_benefits}\n\n"
+                f"📝 {char['description']}\n\n"
+                f"Click below to unlock with Telegram Stars!",
+                reply_markup=keyboard,
+                parse_mode='Markdown'
+            )
+        else:
+            # Character is already unlocked, select it
+            character_manager.set_active_character(user_id, character_id)
+            await query.edit_message_text(
+                f"✅ **{char['name']} selected!**\n\n"
+                f"🎭 Role: {char['role']}\n"
+                f"📍 Region: {char['region']}\n"
+                f"💬 Language: {char['language']}\n\n"
+                f"Start chatting with {char['name']} now! 😘\n\n"
+                f"Send /characters to change characters",
+                parse_mode='Markdown'
+            )
+    
+    # Handle character payment requests
+    elif data.startswith("pay_character:"):
+        parts = data.split(":")
+        character_id = int(parts[1])
+        stars_amount = int(parts[2])
+        
+        char = character_manager.get_character_by_id(character_id)
+        if not char:
+            await query.answer("Character not found!")
+            return
+        
+        # Create Stars invoice for character unlock
+        try:
+            await context.bot.send_invoice(
+                chat_id=user_id,
+                title=f"🔒 Unlock {char['name']}",
+                description=f"Unlock {char['name']} ({char['role']}) for unlimited chatting",
+                payload=f"character_unlock:{character_id}",
+                provider_token="",  # Empty for digital goods
+                currency="XTR",
+                prices=[LabeledPrice(f"Unlock {char['name']} ({stars_amount} Stars)", stars_amount)],
+                start_parameter=f"character_{character_id}",
+                need_name=False,
+                need_phone_number=False,
+                need_email=False,
+                need_shipping_address=False,
+                send_phone_number_to_provider=False,
+                send_email_to_provider=False,
+                is_flexible=False,
+                disable_notification=False,
+                protect_content=False,
+                reply_to_message_id=None,
+                allow_sending_without_reply=True,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💳 Pay with Stars", pay=True)],
+                    [InlineKeyboardButton("❌ Cancel", callback_data="cancel_payment")]
+                ])
+            )
+            
+            await query.answer("Payment invoice sent!")
+            
+        except Exception as e:
+            logger.error(f"Error creating character unlock invoice: {e}")
+            await query.answer("Error creating payment. Please try again!")
+    
+    # Handle unlimited access unlock requests
+    elif data.startswith("unlock_unlimited:"):
+        stars_amount = int(data.split(":")[1])
+        
+        # Create Stars invoice for unlimited access
+        try:
+            await context.bot.send_invoice(
+                chat_id=user_id,
+                title="🌟 Unlock Unlimited Access",
+                description=f"Get unlimited access to all characters and premium AI models",
+                payload=f"unlimited_access:{stars_amount}",
+                provider_token="",  # Empty for digital goods
+                currency="XTR",
+                prices=[LabeledPrice(f"Unlimited Access ({stars_amount} Stars)", stars_amount)],
+                start_parameter="unlimited_access",
+                need_name=False,
+                need_phone_number=False,
+                need_email=False,
+                need_shipping_address=False,
+                send_phone_number_to_provider=False,
+                send_email_to_provider=False,
+                is_flexible=False,
+                disable_notification=False,
+                protect_content=False,
+                reply_to_message_id=None,
+                allow_sending_without_reply=True,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💳 Pay with Stars", pay=True)],
+                    [InlineKeyboardButton("❌ Cancel", callback_data="cancel_payment")]
+                ])
+            )
+            
+            await query.answer("Payment invoice sent!")
+            
+        except Exception as e:
+            logger.error(f"Error creating unlimited access invoice: {e}")
+            await query.answer("Error creating payment. Please try again!")
+    
+    # Handle character selection (already unlocked characters)
     elif data.startswith("select_char:"):
         character_id = data.split(":")[1]
         char = character_manager.get_character_by_id(character_id)
@@ -201,46 +335,24 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply)
         return CHATTING
     
-    # Check message count for free users BEFORE processing
-    message_count = get_user_message_count(user_id)
-    
+    # Free user - check message limit
     if message_count >= FREE_MESSAGE_LIMIT:
-        # User has exceeded free limit - don't process the message
-        logger.info(f"User {user_id} exceeded limit ({message_count}/{FREE_MESSAGE_LIMIT})")
-        payment_info = create_payment_instructions(user_id)
+        # User has reached free message limit - show Stars payment option
+        logger.info(f"User {user_id} reached message limit, showing Stars payment")
+        
+        # Create Stars payment keyboard for unlimited access
+        keyboard = stars_payment_manager.create_unlimited_access_keyboard()
+        
         await update.message.reply_text(
-            f"💋 I'm loving our chat, but I need you to unlock me for more! "
-            f"You've used {message_count} free messages.\n\n"
-            f"To unlock unlimited access, pay ₹{payment_info['amount']} to:\n"
-            f"💳 {payment_info['upi_id']}\n\n"
-            f"After payment, send me a screenshot of the transaction! 😘"
+            f"💋 I'm loving our chat, but I need you to unlock me for more! You've used {message_count} free messages.\n\n"
+            f"🌟 **Unlock Unlimited Access**\n"
+            f"• Chat with any character unlimited times\n"
+            f"• Access to all premium AI models\n"
+            f"• No more message restrictions\n\n"
+            f"Click below to unlock with Telegram Stars! 😘",
+            reply_markup=keyboard,
+            parse_mode='Markdown'
         )
-        
-        # Try to send QR code image, but don't fail if it doesn't work
-        try:
-            import os
-            from io import BytesIO
-            
-            # Try to get QR image as bytes
-            qr_bytes = get_qr_image_bytes()
-            if qr_bytes:
-                logger.info(f"QR image created, size: {len(qr_bytes)} bytes")
-                await update.message.reply_photo(
-                    photo=BytesIO(qr_bytes),
-                    caption="📸 Scan this QR code to pay, then send me the screenshot!"
-                )
-                logger.info("QR code sent successfully")
-            else:
-                logger.warning("Failed to create QR image bytes")
-                await update.message.reply_text(
-                    "📸 Please scan the QR code from your UPI app or pay manually using the UPI ID above!"
-                )
-        except Exception as e:
-            logger.warning(f"Failed to send QR code image: {e}")
-            await update.message.reply_text(
-                "📸 Please scan the QR code from your UPI app or pay manually using the UPI ID above!"
-            )
-        
         return CHATTING
     
     # Free user within limit - process the message
@@ -274,85 +386,36 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return CHATTING
 
 async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show payment options for unlimited access"""
     user_id = update.effective_user.id
     logger.info(f"Pay command received from user {user_id}")
     
-    # Check if user has paid (check both systems for compatibility)
+    # Check if user has paid
     is_paid = is_user_paid(user_id) or is_user_paid_upi(user_id)
     
     if is_paid:
         await update.message.reply_text("💋 You're already unlocked! Enjoy unlimited access to me! 😘")
         return CHATTING
     
-    payment_info = create_payment_instructions(user_id)
     message_count = get_user_message_count(user_id)
     
-    await update.message.reply_text(
-        f"💋 Unlock unlimited access to me!\n\n"
-        f"You've used {message_count}/{FREE_MESSAGE_LIMIT} free messages.\n\n"
-        f"To unlock, pay ₹{payment_info['amount']} to:\n"
-        f"💳 {payment_info['upi_id']}\n\n"
-        f"After payment, send me a screenshot of the transaction! 😘"
-    )
+    # Create Stars payment keyboard for unlimited access
+    keyboard = stars_payment_manager.create_unlimited_access_keyboard()
     
-    # Try to send QR code image, but don't fail if it doesn't work
-    try:
-        import os
-        from io import BytesIO
-        
-        # Try to get QR image as bytes
-        qr_bytes = get_qr_image_bytes()
-        if qr_bytes:
-            logger.info(f"QR image created, size: {len(qr_bytes)} bytes")
-            await update.message.reply_photo(
-                photo=BytesIO(qr_bytes),
-                caption="📸 Scan this QR code to pay, then send me the screenshot!"
-            )
-            logger.info("QR code sent successfully")
-        else:
-            logger.warning("Failed to create QR image bytes")
-            await update.message.reply_text(
-                "📸 Please scan the QR code from your UPI app or pay manually using the UPI ID above!"
-            )
-    except Exception as e:
-        logger.warning(f"Failed to send QR code image: {e}")
-        await update.message.reply_text(
-            "📸 Please scan the QR code from your UPI app or pay manually using the UPI ID above!"
-        )
+    await update.message.reply_text(
+        f"💋 I'm loving our chat, but I need you to unlock me for more! You've used {message_count} free messages.\n\n"
+        f"🌟 **Unlock Unlimited Access**\n"
+        f"• Chat with any character unlimited times\n"
+        f"• Access to all premium AI models\n"
+        f"• No more message restrictions\n\n"
+        f"Click below to unlock with Telegram Stars! 😘",
+        reply_markup=keyboard,
+        parse_mode='Markdown'
+    )
     
     return CHATTING
 
-async def handle_payment_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle payment screenshot verification"""
-    user_id = update.effective_user.id
-    logger.info(f"Payment screenshot received from user {user_id}")
-    
-    try:
-        photo = update.message.photo[-1]
-        file = await photo.get_file()
-        image_bytes = await file.download_as_bytearray()
-        
-        if verify_payment_screenshot(image_bytes, user_id):
-            # Mark user as paid in the main database as well
-            mark_user_paid(user_id)
-            await update.message.reply_text(
-                "✅ Payment verified! You now have unlimited access to your AI girlfriend! 😘"
-            )
-        else:
-            await update.message.reply_text(
-                "❌ Couldn't verify your payment. Please make sure:\n"
-                "• The UPI ID and amount are clearly visible\n"
-                "• You paid the correct amount\n"
-                "• The screenshot shows the transaction details\n\n"
-                "Try again or contact support if you're sure you paid correctly."
-            )
-    except Exception as e:
-        logger.error(f"Error processing payment screenshot: {e}")
-        await update.message.reply_text(
-            "❌ Error processing your screenshot. Please try again or contact support."
-        )
-    
-    return CHATTING
+
 
 async def handle_pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle pre-checkout for Stars payments (digital goods)"""
@@ -374,25 +437,27 @@ async def handle_pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         logger.warning(f"Pre-checkout rejected for user {user_id}")
 
-async def handle_successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle successful Stars payment for digital goods"""
-    payment_info = update.message.successful_payment
+async def handle_successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle successful Telegram Stars payments"""
+    payment_data = update.message.successful_payment
     user_id = update.effective_user.id
     
-    logger.info(f"Successful payment received from user {user_id}")
+    logger.info(f"Payment received from user {user_id}: {payment_data}")
     
-    # Process the successful payment
-    payment_data = stars_payment_manager.process_successful_payment(payment_info)
+    # Parse payload to determine payment type
+    payload_parts = payment_data.invoice_payload.split(":")
+    payment_type = payload_parts[0]
     
-    if payment_data["success"]:
-        character_id = payment_data["character_id"]
+    if payment_type == "character_unlock":
+        # Handle character unlock payment
+        character_id = int(payload_parts[1])
         char = character_manager.get_character_by_id(character_id)
         
         if char:
-            # Record transaction in database
+            # Record transaction
             stars_payment_manager.record_transaction(
                 user_id, character_id, char["price_stars"], 
-                payment_data["telegram_payment_charge_id"]
+                payment_data.total_amount, payment_data.telegram_payment_charge_id
             )
             
             # Unlock character for the user
@@ -403,29 +468,53 @@ async def handle_successful_payment(update: Update, context: ContextTypes.DEFAUL
                 await update.message.reply_text(
                     f"🎉 **Payment Successful!**\n\n"
                     f"You've unlocked **{char['name']}**!\n\n"
-                    f"💫 Amount: {payment_data['total_amount']} Stars\n"
+                    f"💫 Amount: {payment_data.total_amount} Stars\n"
                     f"🎭 Character: {char['name']} ({char['role']})\n"
                     f"🤖 {ai_benefits}\n\n"
                     f"Send /characters to select her and start chatting! 😘\n\n"
                     f"💡 **Support**: If you have any issues, send /support",
                     parse_mode='Markdown'
                 )
-                logger.info(f"Character {character_id} unlocked for user {user_id}")
             else:
                 await update.message.reply_text(
-                    "❌ Error unlocking character. Please contact support with your payment ID."
+                    "❌ Error unlocking character. Please contact support with /support"
                 )
-                logger.error(f"Failed to unlock character {character_id} for user {user_id}")
         else:
             await update.message.reply_text(
-                "❌ Character not found. Please contact support with your payment ID."
+                "❌ Character not found. Please contact support with /support"
             )
-            logger.error(f"Character {character_id} not found for user {user_id}")
+    
+    elif payment_type == "unlimited_access":
+        # Handle unlimited access payment
+        stars_amount = int(payload_parts[1])
+        
+        # Mark user as paid for unlimited access
+        mark_user_paid(user_id)
+        
+        # Record transaction
+        stars_payment_manager.record_unlimited_access_transaction(
+            user_id, stars_amount, payment_data.total_amount, 
+            payment_data.telegram_payment_charge_id
+        )
+        
+        await update.message.reply_text(
+            f"🎉 **Unlimited Access Unlocked!**\n\n"
+            f"🌟 **Welcome to Premium!**\n\n"
+            f"💫 Amount: {payment_data.total_amount} Stars\n"
+            f"✨ **What you get:**\n"
+            f"• Unlimited messages with any character\n"
+            f"• Access to all premium AI models\n"
+            f"• No more message restrictions\n"
+            f"• Priority support\n\n"
+            f"Send /characters to explore all characters! 😘\n\n"
+            f"💡 **Support**: If you have any issues, send /support",
+            parse_mode='Markdown'
+        )
+    
     else:
         await update.message.reply_text(
-            "❌ Payment processing error. Please contact support with your payment ID."
+            "❌ Unknown payment type. Please contact support with /support"
         )
-        logger.error(f"Payment processing error for user {user_id}: {payment_data.get('error', 'Unknown error')}")
 
 async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /support command for customer support"""
@@ -475,7 +564,6 @@ def main():
                 CommandHandler("characters", characters_command),
                 CommandHandler("pay", pay),
                 CallbackQueryHandler(handle_character_callback),
-                MessageHandler(filters.PHOTO, handle_payment_screenshot),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, chat)
             ]
         },
